@@ -1,0 +1,1098 @@
+<html>
+
+<head>
+<title>ICG WebGL &mdash; HW1</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript" src="./js/glMatrix-0.9.5.min.js"></script>
+<script type="text/javascript" src="./js/webgl-utils.js"></script>
+
+<!-- 
+    TODO HERE: 
+    modify fragment shader or write another one
+    to implement flat, gouraud and phong shading
+ -->
+    
+ <script id="fragmentShader" type="fragment">
+    #extension GL_OES_standard_derivatives : enable
+    
+    precision mediump float;
+
+    // 從 vertex shader 接收眼空間座標
+    varying vec3 vPosition;
+    varying vec4 vColor; // 接收頂點顏色
+
+    // 光照相關 uniform
+    uniform vec3 lightLoc;      
+    uniform float Ka;           
+    uniform float kd;           
+    uniform float ks;           
+    uniform vec3 materialColor; 
+    uniform float uMaterialShininess;              
+    uniform vec3 uAmbientColor;
+    uniform vec3 lightLoc_2;    
+    uniform vec3 lightColor;
+
+    // 新增的 clipping uniform（以 x 軸為例）
+    uniform float clipXMin;
+    uniform float clipXMax;
+
+    void main(void) {
+        // 進行 x 軸的 3D clipping：若片段的 x 坐標不在 [clipXMin, clipXMax] 區間內，則捨棄該片段
+        if(vPosition.x < clipXMin || vPosition.x > clipXMax) {
+            discard;
+        }
+
+        // 以下是原本的 flat shading 光照計算（保持不變）
+        vec3 dp1 = dFdx(vPosition);
+        vec3 dp2 = dFdy(vPosition);
+        vec3 n = normalize(cross(dp1, dp2));
+
+        vec3 L = normalize(lightLoc - vPosition);
+        vec3 L2 = normalize(lightLoc_2 - vPosition);
+
+        vec3 eyeDirection = normalize(-vPosition);
+
+        vec3 reflectionDirection = reflect(-L, n);
+        vec3 reflectionDirection_2 = reflect(-L2, n);
+
+        float specularLightWeighting = pow(max(dot(reflectionDirection, eyeDirection), 0.0), uMaterialShininess);
+        float specularLightWeighting_2 = pow(max(dot(reflectionDirection_2, eyeDirection), 0.0), uMaterialShininess);
+
+        float diff = max(dot(n, L), 0.0);
+        float diff_2 = max(dot(n, L2), 0.0);
+
+        vec3 lightWeighting = Ka * uAmbientColor
+                              + ks * lightColor * specularLightWeighting 
+                              + kd * lightColor * diff 
+                              + ks * lightColor * specularLightWeighting_2 
+                              + kd * lightColor * diff_2;
+
+        gl_FragColor = vec4(vColor.rgb * lightWeighting, vColor.a);
+    }
+</script>
+
+
+<script id="fragmentShaderGouraud" type="fragment">
+    precision mediump float;
+    
+    varying vec4 vColor;
+    varying vec3 vPosition;
+    
+    // Clipping uniform（以 x 軸為例）
+    uniform float clipXMin;
+    uniform float clipXMax;
+    
+    void main(void) {
+        if(vPosition.x < clipXMin || vPosition.x > clipXMax) {
+            discard;
+        }
+        gl_FragColor = vColor;
+    }
+</script>
+
+<script id="fragmentShaderPhong" type="fragment">
+    precision mediump float;
+    
+    varying vec3 vPosition;
+    varying vec3 vNormal;
+    varying vec3 vColorBase; // 基底顏色來自頂點
+    
+    // 兩組光源位置
+    uniform vec3 lightLoc;
+    uniform vec3 lightLoc_2;
+    
+    // 光源與材質參數
+    uniform vec3 lightColor;       // 光源顏色（假設兩組相同）
+    uniform vec3 uAmbientColor;    // 環境光
+    uniform float kd;              // 漫反射係數
+    uniform float ks;              // 鏡面反射係數
+    uniform float uMaterialShininess;
+    
+    // Clipping uniform（以 x 軸為例）
+    uniform float clipXMin;
+    uniform float clipXMax;
+    
+    void main(void) {
+        // 進行 clipping：檢查眼空間 x 坐標是否在範圍內
+        if(vPosition.x < clipXMin || vPosition.x > clipXMax) {
+            discard;
+        }
+        
+        vec3 normal = normalize(vNormal);
+        vec3 ambient = uAmbientColor;
+        vec3 V = normalize(-vPosition);  // 觀察向量 (假設相機在原點)
+        
+        // 第一組光源
+        vec3 L1 = normalize(lightLoc - vPosition);
+        float diff1 = max(dot(normal, L1), 0.0);
+        vec3 diffuse1 = kd * diff1 * lightColor;
+        vec3 R1 = reflect(-L1, normal);
+        float spec1 = 0.0;
+        if(diff1 > 0.0) {
+            spec1 = pow(max(dot(R1, V), 0.0), uMaterialShininess);
+        }
+        vec3 specular1 = ks * spec1 * lightColor;
+        
+        // 第二組光源
+        vec3 L2 = normalize(lightLoc_2 - vPosition);
+        float diff2 = max(dot(normal, L2), 0.0);
+        vec3 diffuse2 = kd * diff2 * lightColor;
+        vec3 R2 = reflect(-L2, normal);
+        float spec2 = 0.0;
+        if(diff2 > 0.0) {
+            spec2 = pow(max(dot(R2, V), 0.0), uMaterialShininess);
+        }
+        vec3 specular2 = ks * spec2 * lightColor;
+        
+        vec3 finalLight = ambient + diffuse1 + specular1 + diffuse2 + specular2;
+        // 將計算結果與頂點基底顏色混合
+        vec3 finalColor = vColorBase * finalLight;
+
+        gl_FragColor = vec4(finalColor, 1.0);
+    }
+</script>
+
+<script id="fragmentShaderToon" type="fragment">
+    #extension GL_OES_standard_derivatives : enable
+    precision mediump float;
+    
+    varying vec3 vPosition;
+    varying vec3 vNormal;
+    varying vec3 vColorBase;
+    
+    // 光照相關 uniform
+    uniform vec3 lightLoc;          // 光源位置（眼空間中）
+    uniform vec3 lightColor;        // 光源顏色
+    uniform vec3 uAmbientColor;     // 環境光顏色
+    uniform float kd;               // 漫反射係數
+    
+    // Toon shading 參數
+    uniform float levels;           // 離散化層數（例如 4.0 意味著將光照分為4個階段）
+    //uniform float edgeThreshold;    // 邊緣偵測門檻（控制輪廓粗細）
+
+    
+    // Clipping uniform（以 x 軸為例）
+    uniform float clipXMin;
+    uniform float clipXMax;
+    
+    void main(void) {
+        // 進行 clipping：檢查眼空間 x 坐標是否在範圍內
+        if(vPosition.x < clipXMin || vPosition.x > clipXMax) {
+            discard;
+        }
+        // 將法向量正規化
+        vec3 normal = normalize(vNormal);
+        // 計算光線方向
+        vec3 L = normalize(lightLoc - vPosition);
+        // Lambert 漫反射：取得光線與法向量之間的點積（0~1）
+        float NdotL = max(dot(normal, L), 0.0);
+        
+        // 將漫反射強度離散化（量化）
+        float quantized = floor(NdotL * levels) / levels;
+        
+        // 組合最終顏色：環境光加上量化後的漫反射光
+        vec3 color = uAmbientColor + kd * quantized * lightColor;
+        
+        // 邊緣偵測：利用 dFdx 與 dFdy 計算法向量的差異
+        //vec3 dx = dFdx(vNormal);
+        //vec3 dy = dFdy(vNormal);
+        //float edge = length(cross(dx, dy));
+        
+        // 若邊緣值超過門檻，將此片段視為邊緣，畫成黑色
+        //if(edge > edgeThreshold) {
+        //    color = vec3(0.0);
+        //}
+        
+        vec3 finalColor = vColorBase * color;
+        
+        gl_FragColor = vec4(finalColor, 1.0);
+    }
+</script>
+
+
+
+
+
+<!-- 
+    TODO HERE:
+    modify vertex shader or write another one
+    to implement flat, gouraud and phong shading
+
+    NOTE:
+    if you want to write bonus part (texture mapping),
+    only Teapot.json has extra attribute "vertexTextureCoords"
+    which is used for texture mappping.
+ -->
+<script id="vertexShader" type="vertex">
+    // 僅保留頂點位置，計算眼空間座標後傳遞給 fragment shader
+    attribute vec3 aVertexPosition;
+    attribute vec3 aFrontColor;
+    
+    // 變換矩陣：模型視圖與投影
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    
+    // 將眼空間位置傳到 fragment shader 用來計算面法向量
+    varying vec3 vPosition;
+    varying vec4 vColor; // 傳遞頂點顏色
+
+    void main(void) {
+        vec4 mvPos = uMVMatrix * vec4(aVertexPosition, 1.0);
+        vPosition = mvPos.xyz;
+        // 把頂點顏色傳遞出去
+        vColor = vec4(aFrontColor, 1.0);
+        gl_Position = uPMatrix * mvPos;
+    }
+</script>
+
+<script id="vertexShaderGouraud" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec3 aFrontColor; // 頂點顏色
+    
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    
+    // 兩組光源位置 (眼空間)
+    uniform vec3 lightLoc;
+    uniform vec3 lightLoc_2;
+    
+    // 光照參數
+    uniform vec3 uAmbientColor;
+    uniform float kd;  // 漫反射係數
+    uniform float ks;  // 鏡面反射係數
+    uniform float uMaterialShininess;
+    uniform vec3 lightColor; // 假設兩組光源顏色相同
+    
+    varying vec4 vColor;
+    varying vec3 vPosition; // 新增：傳遞頂點的眼空間位置
+    
+    void main(void) {
+        // 計算頂點在眼空間的位置
+        vec4 mvPos = uMVMatrix * vec4(aVertexPosition, 1.0);
+        vPosition = mvPos.xyz;
+        
+        // 取得眼空間中的法向量
+        vec3 normal = normalize((uMVMatrix * vec4(aVertexNormal, 0.0)).xyz);
+        // 取得頂點基底顏色
+        vec3 baseColor = aFrontColor;
+        
+        // 第一組光源
+        vec3 L1 = normalize(lightLoc - mvPos.xyz);
+        vec3 V = normalize(-mvPos.xyz);
+        vec3 R1 = reflect(-L1, normal);
+        float lambert1 = max(dot(normal, L1), 0.0);
+        float specular1 = 0.0;
+        if(lambert1 > 0.0) {
+            specular1 = pow(max(dot(R1, V), 0.0), uMaterialShininess);
+        }
+        
+        // 第二組光源
+        vec3 L2 = normalize(lightLoc_2 - mvPos.xyz);
+        vec3 R2 = reflect(-L2, normal);
+        float lambert2 = max(dot(normal, L2), 0.0);
+        float specular2 = 0.0;
+        if(lambert2 > 0.0) {
+            specular2 = pow(max(dot(R2, V), 0.0), uMaterialShininess);
+        }
+        
+        // 組合光照分量
+        vec3 ambient = uAmbientColor;
+        vec3 light1 = (kd * lambert1 + ks * specular1) * lightColor;
+        vec3 light2 = (kd * lambert2 + ks * specular2) * lightColor;
+        vColor = vec4(baseColor * (ambient + light1 + light2), 1.0);
+        
+        gl_Position = uPMatrix * mvPos;
+    }
+</script>
+
+
+<script id="vertexShaderPhong" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec3 aFrontColor; // 頂點顏色
+    
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    
+    varying vec3 vPosition;
+    varying vec3 vNormal;
+    varying vec3 vColorBase; // 傳遞頂點基底顏色
+    
+    void main(void) {
+        vec4 mvPos = uMVMatrix * vec4(aVertexPosition, 1.0);
+        vPosition = mvPos.xyz;
+        // 將法向量轉換到眼空間
+        vNormal = normalize((uMVMatrix * vec4(aVertexNormal, 0.0)).xyz);
+        vColorBase = aFrontColor;
+        gl_Position = uPMatrix * mvPos;
+    }
+</script>
+
+<script id="vertexShaderToon" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec3 aFrontColor; // 頂點顏色
+    
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    
+    varying vec3 vPosition;
+    varying vec3 vNormal;
+    varying vec3 vColorBase;
+    
+    void main(void) {
+        vec4 mvPos = uMVMatrix * vec4(aVertexPosition, 1.0);
+        vPosition = mvPos.xyz;
+        // 將法向量轉換到眼空間（不做正規化，在 fragment shader 裡正規化即可）
+        vNormal = (uMVMatrix * vec4(aVertexNormal, 0.0)).xyz;
+        vColorBase = aFrontColor;
+        gl_Position = uPMatrix * mvPos;
+    }
+</script>
+
+
+
+
+<script type="text/javascript">
+    // common variables
+    var gl;
+    var shaderProgram;
+
+    var mvMatrix = mat4.create();
+    var pMatrix  = mat4.create();
+
+    // Teapot buffers
+    var teapotVertexPositionBuffer;
+    var teapotVertexNormalBuffer;
+    var teapotVertexFrontColorBuffer;
+
+    // 新增：Kangaroo buffers
+    var kangarooVertexPositionBuffer;
+    var kangarooVertexNormalBuffer;
+    var kangarooVertexFrontColorBuffer;
+
+    // 新增：Easter buffers
+    var easterVertexPositionBuffer;
+    var easterVertexNormalBuffer;
+    var easterVertexFrontColorBuffer;
+
+    var teapotAngle = 180;
+    var lastTime    = 0;
+
+    var ka = 0.1;
+    var light_locations = new Float32Array([30., 20., -25.]);
+
+    var currentShadingMode = "flat"; // 預設為 flat shading
+
+    var perspectiveAnimStartTime = null; // 記錄動畫開始時間
+    var initialFOV = 45;    // 初始 FOV（度）
+    var targetFOV = 60;     // 目標 FOV（度）
+    var currentFOV = initialFOV;
+
+
+
+    //*************************************************
+    // Initialization functions
+    //*************************************************
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+            gl.getExtension('OES_standard_derivatives');
+            gl.viewportWidth  = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } 
+        catch (e) {
+        }
+
+        if (!gl) {
+            alert("Could not initialise WebGL");
+        }
+    }
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var shaderSource = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                shaderSource += k.textContent;
+            }
+
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } 
+        else if (shaderScript.type == "vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } 
+        else {
+            return null;
+        }
+
+        gl.shaderSource(shader, shaderSource);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+    function changeShadingMode() {
+        currentShadingMode = document.getElementById("shadingMode").value;
+        initShaders();  // 重新初始化 shader 程式
+    }
+
+    function initShaders() {
+        var fragmentShader, vertexShader;
+
+        if (currentShadingMode === "flat") {
+            fragmentShader = getShader(gl, "fragmentShader");
+            vertexShader = getShader(gl, "vertexShader");
+        } else if (currentShadingMode === "gouraud") {
+            fragmentShader = getShader(gl, "fragmentShaderGouraud");
+            vertexShader = getShader(gl, "vertexShaderGouraud");
+        } else if (currentShadingMode === "phong") {
+            fragmentShader = getShader(gl, "fragmentShaderPhong");
+            vertexShader = getShader(gl, "vertexShaderPhong");
+        } else if (currentShadingMode === "toon") {
+            fragmentShader = getShader(gl, "fragmentShaderToon");
+            vertexShader = getShader(gl, "vertexShaderToon");
+        }
+
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+        shaderProgram.vertexFrontColorAttribute = gl.getAttribLocation(shaderProgram, "aFrontColor");
+        gl.enableVertexAttribArray(shaderProgram.vertexFrontColorAttribute);
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "Ka"), ka);
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "lightLoc"), light_locations);
+        // 設定漫反射係數 kd 與材質顏色
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "kd"), 1);
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "ks"), 1);
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "materialColor"), new Float32Array([0.8, 0.8, 0.8]));
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "uMaterialShininess"), 16.0);
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "uAmbientColor"), new Float32Array([0.2, 0.2, 0.2]));
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "lightColor"), new Float32Array([0.8, 0.8, 0.8]));
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "lightLoc_2"), new Float32Array([-50, -60, -50]));
+
+        // 設定 Clipping 平面的初始值
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "clipXMin"), -80);
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "clipXMax"), 80);
+        
+        shaderProgram.pMatrixUniform  = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "levels"), 4.0);       // 分成4個色階
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "edgeThreshold"), 1);  // 邊緣偵測門檻
+
+    }
+
+    function setMatrixUniforms() {
+        gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+    }
+
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+    //*************************************************
+    // 模型載入函式
+    //*************************************************
+    function handleLoadedTeapot(teapotData) {
+        console.log("Teapot data loaded:", teapotData);
+        teapotVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexPositions), gl.STATIC_DRAW);
+        teapotVertexPositionBuffer.itemSize = 3;
+        teapotVertexPositionBuffer.numItems = teapotData.vertexPositions.length / 3;
+
+        teapotVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexNormals), gl.STATIC_DRAW);
+        teapotVertexNormalBuffer.itemSize = 3;
+        teapotVertexNormalBuffer.numItems = teapotData.vertexNormals.length / 3;
+
+        teapotVertexFrontColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexFrontColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexFrontcolors), gl.STATIC_DRAW);
+        teapotVertexFrontColorBuffer.itemSize = 3;
+        teapotVertexFrontColorBuffer.numItems = teapotData.vertexFrontcolors.length / 3;
+    }
+
+    // 新增：處理 Kangaroo 模型
+    function handleLoadedKangaroo(kangarooData) {
+        console.log("Kangaroo data loaded:", kangarooData);
+        kangarooVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(kangarooData.vertexPositions), gl.STATIC_DRAW);
+        kangarooVertexPositionBuffer.itemSize = 3;
+        kangarooVertexPositionBuffer.numItems = kangarooData.vertexPositions.length / 3;
+
+        kangarooVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(kangarooData.vertexNormals), gl.STATIC_DRAW);
+        kangarooVertexNormalBuffer.itemSize = 3;
+        kangarooVertexNormalBuffer.numItems = kangarooData.vertexNormals.length / 3;
+
+        kangarooVertexFrontColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexFrontColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(kangarooData.vertexFrontcolors), gl.STATIC_DRAW);
+        kangarooVertexFrontColorBuffer.itemSize = 3;
+        kangarooVertexFrontColorBuffer.numItems = kangarooData.vertexFrontcolors.length / 3;
+    }
+
+    // 新增：處理 Easter 模型
+    function handleLoadedEaster(easterData) {
+        console.log("Easter data loaded:", easterData);
+        easterVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, easterVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(easterData.vertexPositions), gl.STATIC_DRAW);
+        easterVertexPositionBuffer.itemSize = 3;
+        easterVertexPositionBuffer.numItems = easterData.vertexPositions.length / 3;
+
+        easterVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, easterVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(easterData.vertexNormals), gl.STATIC_DRAW);
+        easterVertexNormalBuffer.itemSize = 3;
+        easterVertexNormalBuffer.numItems = easterData.vertexNormals.length / 3;
+
+        easterVertexFrontColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, easterVertexFrontColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(easterData.vertexFrontcolors), gl.STATIC_DRAW);
+        easterVertexFrontColorBuffer.itemSize = 3;
+        easterVertexFrontColorBuffer.numItems = easterData.vertexFrontcolors.length / 3;
+    }
+
+    // 新增：載入所有模型的函式
+    function loadModels() {
+        // 載入 Teapot
+        var request1 = new XMLHttpRequest();
+        request1.open("GET", "./model/Teapot.json");
+        request1.onreadystatechange = function () {
+            if (request1.readyState == 4) {
+                handleLoadedTeapot(JSON.parse(request1.responseText));
+            }
+        }
+        request1.send();
+
+        // 載入 Kangaroo
+        var request2 = new XMLHttpRequest();
+        request2.open("GET", "./model/Kangaroo.json");
+        request2.onreadystatechange = function () {
+            if (request2.readyState == 4) {
+                handleLoadedKangaroo(JSON.parse(request2.responseText));
+            }
+        }
+        request2.send();
+
+        // 載入 Easter
+        var request3 = new XMLHttpRequest();
+        request3.open("GET", "./model/Car_road.json");
+        request3.onreadystatechange = function () {
+            if (request3.readyState == 4) {
+                handleLoadedEaster(JSON.parse(request3.responseText));
+            }
+        }
+        request3.send();
+    }
+
+
+    //*************************************************
+    // Rendering functions
+    //*************************************************
+    /*
+        TODO HERE:
+        add two or more objects showing on the canvas
+        (it needs at least three objects showing at the same time)
+    */
+    function drawScene() {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clearColor(ka, ka, ka, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        // 確保所有模型的資料都已載入
+        if (!teapotVertexPositionBuffer || !kangarooVertexPositionBuffer || !easterVertexPositionBuffer) {
+            return;
+        }
+
+        // Setup Projection Matrix
+        mat4.perspective(currentFOV, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+
+        // Setup Model-View Matrix
+        mat4.identity(mvMatrix);
+        mat4.translate(mvMatrix, [0,0,0]);
+        mat4.translate(mvMatrix, update_trans());
+        // 加入 Shear：取得 Teapot 的 shear 參數並產生 shear 矩陣
+        var shearParams = update_shear();
+        var shearMat = mat4Shear(shearParams);
+        mat4.multiply(shearMat, mvMatrix, mvMatrix);
+        // 加入 scale (對 Teapot)
+        mat4.scale(mvMatrix, update_scale());
+        
+        var rotateVec_init = [0,0,0];
+        mat4.rotate(mvMatrix, degToRad(rotateVec_init[0]), [1, 0, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec_init[1]), [0, 1, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec_init[2]), [0, 0, 1]);
+        
+        var rotateVec = update_rotate();
+        mat4.rotate(mvMatrix, degToRad(rotateVec[0]), [1, 0, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec[1] + teapotAngle), [0, 1, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec[2]), [0, 0, 1]);
+
+        setMatrixUniforms();
+        // 在這裡輸出平移向量（Teapot 的位置）
+        console.log("Teapot position:", [mvMatrix[12], mvMatrix[13], mvMatrix[14]]);
+
+        // Setup teapot position data
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, 
+                               teapotVertexPositionBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+
+        // Setup teapot front color data
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexFrontColorBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexFrontColorAttribute, 
+                               teapotVertexFrontColorBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        
+        // Setup teapot normal data
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, 
+                               teapotVertexNormalBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+
+        // Setup ambient light and light position
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "Ka"), ka);
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "lightLoc"), light_locations);
+        //console.log("lightLoc:", light_locations);
+        // 設定漫反射係數 kd 與材質顏色
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "kd"), 0.6);
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "materialColor"), new Float32Array([0.8, 0.8, 0.8]));
+        //console.log("pMatrix:", pMatrix);
+        //console.log("mvMatrix:", mvMatrix);
+        gl.drawArrays(gl.TRIANGLES, 0, teapotVertexPositionBuffer.numItems);
+
+        
+
+        // --- 畫 Kangaroo ---
+        mat4.identity(mvMatrix);
+        // 固定平移：mat4.translate(mvMatrix, [-30, 10, -70]);
+        mat4.translate(mvMatrix, update_trans_k());
+        // 加入 Shear：取得 Kangaroo 的 shear 參數並產生 shear 矩陣
+        var shearParams = update_shear_k();
+        var shearMat_k = mat4Shear(shearParams);
+        mat4.multiply(shearMat_k, mvMatrix, mvMatrix);
+        mat4.scale(mvMatrix, [20.0, 20.0, 20.0]);
+        // 加入 scale (對 Kangaroo)
+        mat4.scale(mvMatrix, update_scale_k());
+
+        // 再做旋轉：
+        var rotateVec_k = update_rotate_k();
+        mat4.rotate(mvMatrix, degToRad(rotateVec_k[0]), [1, 0, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec_k[1]), [0, 1, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec_k[2]), [0, 0, 1]);
+
+        setMatrixUniforms();
+        console.log("Kangaroo position:", [mvMatrix[12], mvMatrix[13], mvMatrix[14]]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, kangarooVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexFrontColorBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexFrontColorAttribute, kangarooVertexFrontColorBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, kangarooVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, kangarooVertexPositionBuffer.numItems);
+
+        // --- 畫 Easter ---
+        mat4.identity(mvMatrix);
+        // 固定平移：mat4.translate(mvMatrix, [35, -8, -70]);
+        mat4.translate(mvMatrix, update_trans_e());
+        // 加入 Shear：取得 Easter 的 shear 參數並產生 shear 矩陣
+        var shearParams = update_shear_e();
+        var shearMat_e = mat4Shear(shearParams);
+        mat4.multiply(shearMat_e, mvMatrix, mvMatrix);
+        mat4.scale(mvMatrix, [20.0, 20.0, 20.0]);
+        // 加入 scale (對 Easter)
+        mat4.scale(mvMatrix, update_scale_e());
+
+        // 旋轉：
+        var rotateVec_e = update_rotate_e();
+        mat4.rotate(mvMatrix, degToRad(rotateVec_e[0]), [1, 0, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec_e[1]), [0, 1, 0]);
+        mat4.rotate(mvMatrix, degToRad(rotateVec_e[2]), [0, 0, 1]);
+        
+        setMatrixUniforms();
+        console.log("Easter position:", [mvMatrix[12], mvMatrix[13], mvMatrix[14]]);
+        gl.bindBuffer(gl.ARRAY_BUFFER, easterVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, easterVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, easterVertexFrontColorBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexFrontColorAttribute, easterVertexFrontColorBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, easterVertexNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, easterVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, easterVertexPositionBuffer.numItems);
+
+    }
+
+    function animate() {
+        var timeNow = new Date().getTime();
+
+        if (perspectiveAnimStartTime === null) {
+            perspectiveAnimStartTime = timeNow;
+        }
+        
+        // 更新 perspective 動畫（5秒內）
+        var t = (timeNow - perspectiveAnimStartTime) / 5000; // t 從 0 到 1
+        if (t < 1) {
+            currentFOV = initialFOV + (targetFOV - initialFOV) * t;
+        } else {
+            currentFOV = targetFOV;
+        }
+    
+        if (lastTime != 0) {
+            var elapsed = timeNow - lastTime;
+            teapotAngle += 0.03 * elapsed;
+        }
+        
+        lastTime = timeNow;
+    }
+
+    function tick() {
+        requestAnimFrame(tick);
+        drawScene();
+        animate();
+    }
+
+    function webGLStart() {
+        var canvas = document.getElementById("ICG-canvas");
+        initGL(canvas);
+        initShaders();
+        loadModels();
+
+        gl.clearColor(ka, ka, ka, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+        
+        tick();
+    }
+
+
+    //*************************************************
+    // Parsing parameters
+    //*************************************************
+    function update_ambient_light(){
+        ka = document.getElementById("am_ka").value;
+    }
+
+    function update_light_location(){
+        light_locations[0] = document.getElementById("llocX").value;
+        light_locations[1] = document.getElementById("llocY").value;
+        light_locations[2] = document.getElementById("llocZ").value;
+    }
+    
+    function update_trans(){
+        var tx = document.getElementById("transX").value;
+        var ty = document.getElementById("transY").value;
+        var tz = document.getElementById("transZ").value;
+        return vec3.create([tx, ty, tz]);
+    }
+
+    function update_trans_k(){
+        // 取得 Kangaroo 平移的滑桿值，記得用 parseFloat 轉換字串
+        var tx = parseFloat(document.getElementById("transX_k").value);
+        var ty = parseFloat(document.getElementById("transY_k").value);
+        var tz = parseFloat(document.getElementById("transZ_k").value);
+        // 可在初始值上設定偏移，例如初始值為 [-30, 10, -70]
+        return vec3.create([tx, ty, tz]);
+    }
+    
+    function update_trans_e(){
+        // 取得 Easter 平移的滑桿值
+        var tx = parseFloat(document.getElementById("transX_e").value);
+        var ty = parseFloat(document.getElementById("transY_e").value);
+        var tz = parseFloat(document.getElementById("transZ_e").value);
+        // 初始值設定為 [35, -8, -70]
+        return vec3.create([tx, ty, tz]);
+    }
+
+    function update_rotate(){
+        var rx = document.getElementById("rotateX").value;
+        var ry = document.getElementById("rotateY").value;
+        var rz = document.getElementById("rotateZ").value;
+
+        return vec3.create([rx, ry, rz]);
+    }
+
+    // 新增 Kangaroo 的旋轉函式
+    function update_rotate_k(){
+        var rx = parseFloat(document.getElementById("rotateX_k").value);
+        var ry = parseFloat(document.getElementById("rotateY_k").value);
+        var rz = parseFloat(document.getElementById("rotateZ_k").value);
+        //console.log("Kangaroo rotation:", [rx, ry, rz]);
+        return vec3.create([rx, ry, rz]);
+    }
+    
+    // 新增 Easter 的旋轉函式
+    function update_rotate_e(){
+        var rx = parseFloat(document.getElementById("rotateX_e").value);
+        var ry = parseFloat(document.getElementById("rotateY_e").value);
+        var rz = parseFloat(document.getElementById("rotateZ_e").value);
+        //console.log("Easter rotation:", [rx, ry, rz]);
+        return vec3.create([rx, ry, rz]);
+    }
+
+    function update_scale(){
+        var sx = parseFloat(document.getElementById("scaleX").value);
+        var sy = parseFloat(document.getElementById("scaleY").value);
+        var sz = parseFloat(document.getElementById("scaleZ").value);
+        console.log("Teapot scale:", [sx, sy, sz]);
+        return [sx, sy, sz];
+    }
+    
+    function update_scale_k(){
+        var sx = parseFloat(document.getElementById("scaleX_k").value);
+        var sy = parseFloat(document.getElementById("scaleY_k").value);
+        var sz = parseFloat(document.getElementById("scaleZ_k").value);
+        console.log("Kangaroo scale:", [sx, sy, sz]);
+        return [sx, sy, sz];
+    }
+    
+    function update_scale_e(){
+        var sx = parseFloat(document.getElementById("scaleX_e").value);
+        var sy = parseFloat(document.getElementById("scaleY_e").value);
+        var sz = parseFloat(document.getElementById("scaleZ_e").value);
+        console.log("Easter scale:", [sx, sy, sz]);
+        return [sx, sy, sz];
+    }
+
+    // 更新 Shear 參數，返回 [shearXY, shearXZ] 陣列
+    function update_shear(){
+        var shXY = parseFloat(document.getElementById("shearXY").value);
+        return shXY;
+    }
+
+    function update_shear_k(){
+        var shXY = parseFloat(document.getElementById("shearXY_k").value);
+        return shXY;
+    }
+
+    function update_shear_e(){
+        var shXY = parseFloat(document.getElementById("shearXY_e").value);
+        return shXY;
+    }
+
+    // 定義一個產生 Shear 矩陣的函式（shear in x direction: x' = x + shearXY*y + shearXZ*z）
+    function mat4Shear(shearXY) {
+        // 建立一個單位矩陣
+        var shearMat = mat4.create();
+        // 在 column-major order 下，m[4]是 (row=1, col=0) 但對應 x' = x + ... 請參考下列公式：
+        // 我們希望：x' = x + shearXY*y + shearXZ*z，
+        // 而在變換矩陣中，x' = m[0]*x + m[4]*y + m[8]*z + m[12]*1，
+        // 所以我們設定 m[0]=1, m[4]=shearXY, m[8]=shearXZ, m[12]=0.
+        shearMat[0] = 1; shearMat[1] = 0; shearMat[2] = 0; shearMat[3] = 0;
+        shearMat[4] = shearXY; shearMat[5] = 1; shearMat[6] = 0; shearMat[7] = 0;
+        shearMat[8] = 0; shearMat[9] = 0; shearMat[10] = 1; shearMat[11] = 0;
+        shearMat[12] = 0; shearMat[13] = 0; shearMat[14] = 0; shearMat[15] = 1;
+        return shearMat;
+    }
+
+    function updateClip(){
+        var clipXMin = parseFloat(document.getElementById("clipXMin").value);
+        var clipXMax = parseFloat(document.getElementById("clipXMax").value);
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "clipXMin"), clipXMin);
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "clipXMax"), clipXMax);
+        console.log("Clipping X range:", clipXMin, clipXMax);
+    }
+    
+    function updateTargetFOV(){
+        var newFOV = parseFloat(document.getElementById("targetFOV").value);
+        targetFOV = newFOV;
+        document.getElementById("targetFOVValue").innerHTML = newFOV;
+        // 將當前 FOV 作為新的初始 FOV，並重設動畫開始時間
+        initialFOV = currentFOV;
+        perspectiveAnimStartTime = new Date().getTime();
+    }
+
+</script>
+</head>
+
+<body onload="webGLStart();">
+    <p style="position: absolute; right: 2%; top:6%; ">
+        <canvas id="ICG-canvas" style="border: none;" width="1060" height="590" ></canvas>
+    </p>
+
+    <p style="position: absolute; left: 40%; top: 80%;">
+        <label for="shadingMode">Shading Mode:</label>
+        <select id="shadingMode" onchange="changeShadingMode()">
+          <option value="flat">Flat Shading</option>
+          <option value="gouraud">Gouraud Shading</option>
+          <option value="phong">Phong Shading</option>
+          <option value="toon">Toon Shading</option>
+        </select>
+      </p>
+
+    <p style="position: absolute; left: 1%; top: 1%; max-width: 30%; min-width: 30%; ">
+
+        </br>
+        <span>Ambient Light</span>
+        <table>
+            <tr>
+                <td>Ka: <input style="max-width: 70%; vertical-align: middle;" id="am_ka" type="range" autocomplete="off" value="0.1" max="1" min="0" step="0.05" oninput="update_ambient_light()"></td>
+            </tr>
+        </table>
+        </br>
+        <span>Light 0</span>
+        <table>
+            <tr>
+                <td>X: <input style="max-width: 70%; vertical-align: middle;" id="llocX" type="range" autocomplete="off" value="30" max="40" min="-40" oninput="update_light_location()"></td>
+                <td>Y: <input style="max-width: 70%; vertical-align: middle;" id="llocY" type="range" autocomplete="off" value="20" max="40" min="-40" oninput="update_light_location()"></td>
+                <td>Z: <input style="max-width: 70%; vertical-align: middle;" id="llocZ" type="range" autocomplete="off" value="-25" max="0" min="-75" oninput="update_light_location()"></td>
+            </tr>
+        </table>
+        </br>
+        </br>
+        </br>
+    </p>
+    
+    <!-- Teapot Transformation 控制區 -->
+    <p style="position: absolute; left: 1%; top: 18%; max-width: 30%; min-width: 30%;">
+      <span style="font-weight:bold;">Teapot Transformation</span>
+      <table border="1" style="font-size:12px;">
+        <!-- Translation -->
+        <tr><th colspan="3">Translation</th></tr>
+        <tr>
+          <td>X: <input id="transX" type="range" value="0" min="-50" max="50" step="1" oninput="update_trans()"></td>
+          <td>Y: <input id="transY" type="range" value="0" min="-50" max="50" step="1" oninput="update_trans()"></td>
+          <td>Z: <input id="transZ" type="range" value="-70" min="-120" max="0" step="1" oninput="update_trans()"></td>
+        </tr>
+        <!-- Rotation -->
+        <tr><th colspan="3">Rotation</th></tr>
+        <tr>
+          <td>X: <input id="rotateX" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate()"></td>
+          <td>Y: <input id="rotateY" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate()"></td>
+          <td>Z: <input id="rotateZ" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate()"></td>
+        </tr>
+        <!-- Scale -->
+        <tr><th colspan="3">Scale</th></tr>
+        <tr>
+          <td>X: <input id="scaleX" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale()"></td>
+          <td>Y: <input id="scaleY" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale()"></td>
+          <td>Z: <input id="scaleZ" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale()"></td>
+        </tr>
+        <!-- Shear -->
+        <tr><th colspan="3">Shear</th></tr>
+        <tr>
+          <td><input id="shearXY" type="range" value="0" min="-2" max="2" step="0.01" oninput="update_shear()"></td>
+        </tr>
+      </table>
+      <br>
+      <!-- 接下來類似新增 Kangaroo 與 Easter 的 Transformation 控制（翻譯、旋轉、縮放、shear），可參考 Teapot 的做法，將 id 後綴 _k 與 _e 分別對應 -->
+      <!-- Kangaroo Transformation -->
+      <span style="font-weight:bold;">Kangaroo Transformation</span>
+      <table border="1" style="font-size:12px;">
+        <tr><th colspan="3">Translation</th></tr>
+        <tr>
+          <td>X: <input id="transX_k" type="range" value="-30" min="-50" max="50" step="1" oninput="update_trans_k()"></td>
+          <td>Y: <input id="transY_k" type="range" value="10" min="-50" max="50" step="1" oninput="update_trans_k()"></td>
+          <td>Z: <input id="transZ_k" type="range" value="-70" min="-120" max="0" step="1" oninput="update_trans_k()"></td>
+        </tr>
+        <tr><th colspan="3">Rotation</th></tr>
+        <tr>
+          <td>X: <input id="rotateX_k" type="range" value="-90" min="-180" max="180" step="1" oninput="update_rotate_k()"></td>
+          <td>Y: <input id="rotateY_k" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate_k()"></td>
+          <td>Z: <input id="rotateZ_k" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate_k()"></td>
+        </tr>
+        <tr><th colspan="3">Scale</th></tr>
+        <tr>
+          <td>X: <input id="scaleX_k" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale_k()"></td>
+          <td>Y: <input id="scaleY_k" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale_k()"></td>
+          <td>Z: <input id="scaleZ_k" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale_k()"></td>
+        </tr>
+        <tr><th colspan="3">Shear</th></tr>
+        <tr>
+          <td><input id="shearXY_k" type="range" value="0" min="-2" max="2" step="0.01" oninput="update_shear_k()"></td>
+        </tr>
+      </table>
+      <br>
+      <!-- Easter Transformation -->
+      <span style="font-weight:bold;">Easter Transformation</span>
+      <table border="1" style="font-size:12px;">
+        <tr><th colspan="3">Translation</th></tr>
+        <tr>
+          <td>X: <input id="transX_e" type="range" value="32" min="-50" max="50" step="1" oninput="update_trans_e()"></td>
+          <td>Y: <input id="transY_e" type="range" value="-15" min="-50" max="50" step="1" oninput="update_trans_e()"></td>
+          <td>Z: <input id="transZ_e" type="range" value="-70" min="-120" max="0" step="1" oninput="update_trans_e()"></td>
+        </tr>
+        <tr><th colspan="3">Rotation</th></tr>
+        <tr>
+          <td>X: <input id="rotateX_e" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate_e()"></td>
+          <td>Y: <input id="rotateY_e" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate_e()"></td>
+          <td>Z: <input id="rotateZ_e" type="range" value="0" min="-180" max="180" step="1" oninput="update_rotate_e()"></td>
+        </tr>
+        <tr><th colspan="3">Scale</th></tr>
+        <tr>
+          <td>X: <input id="scaleX_e" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale_e()"></td>
+          <td>Y: <input id="scaleY_e" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale_e()"></td>
+          <td>Z: <input id="scaleZ_e" type="range" value="1" min="0.1" max="10" step="0.1" oninput="update_scale_e()"></td>
+        </tr>
+        <tr><th colspan="3">Shear</th></tr>
+        <tr>
+          <td><input id="shearXY_e" type="range" value="0" min="-2" max="2" step="0.01" oninput="update_shear_e()"></td>
+        </tr>
+      </table>
+    </p>
+    
+    <p style="position: absolute; left: 1%; top: 95%; max-width: 30%; min-width: 30%;">
+      <span style="font-weight:bold;">Clipping (X Direction)</span>
+      <table border="1" style="font-size:12px;">
+        <tr>
+          <td>Clip X Min: <input id="clipXMin" type="range" value="-80" min="-100" max="0" step="1" oninput="updateClip()"></td>
+        </tr>
+        <tr>
+          <td>Clip X Max: <input id="clipXMax" type="range" value="80" min="0" max="100" step="1" oninput="updateClip()"></td>
+        </tr>
+      </table>
+    </p>
+
+    <p style="position: absolute; left: 40%; top: 85%;">
+        <label for="targetFOV">Target FOV:</label>
+        <input id="targetFOV" type="range" min="30" max="120" step="1" value="60" onchange="updateTargetFOV()">
+        <span id="targetFOVValue">60</span>degrees
+    </p>
+
+</body>
+
+</html>
